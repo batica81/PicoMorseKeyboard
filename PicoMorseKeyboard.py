@@ -2,7 +2,7 @@
 
 # Raspberry Pi Pico is needed to use this app! Maybe I will do an Arduino version in the future.
 # Basic purpose of the app is to take input from serial port and turn it into Morse code.
-# Then it plays it via sound, light or by acting as a straight key and triggering an external device (radio).
+# Then it plays it via sound, light or by acting as a paddle and triggering an external device (radio).
 # Interfacing with the external device can be done with an optocupler, transistor, relay or similar simple circuit.
 # There is one memory slot that can be played with a button push, and changed through console.
 # WPM and sidetone frequency can be changed as well.
@@ -12,9 +12,16 @@
 
 import time, sys, utime  # import necessary libraries,
 from machine import Pin, PWM, Timer
+from rp2 import PIO, StateMachine, asm_pio
+from time import sleep
+
+keyerButton = Pin(21, Pin.IN, Pin.PULL_UP)
+# real_freq = 7022000
+real_freq = 7020000
+ledState = False
 
 led = Pin(25, Pin.OUT)  # the LED on the Pico is pin 25
-digitalOut = Pin(9, Pin.OUT)  # output to trigger external device
+digitalOut = Pin(5, Pin.OUT)  # output to trigger external device
 button = Pin(10, Pin.IN, Pin.PULL_UP)
 buzzer = PWM(Pin(15))
 
@@ -26,13 +33,45 @@ memory1 = "CQ DE YU4HAK"
 BlinkRate = 0.062
 BuzzFrequency = 600
 
+
+@asm_pio(set_init=PIO.OUT_LOW)
+def square():
+    wrap_target()
+    set(pins, 1)
+    set(pins, 0)
+    wrap()
+    
+def setFreq(real_freq):
+    global sm
+    sm = rp2.StateMachine(0, square, freq=real_freq*2, set_base=Pin(2))
+
+setFreq(real_freq)
+
+def vfoOn():
+    ledState = True
+    setFreq(real_freq)
+    sm.active(ledState)
+    led(ledState)
+    print("Led is:" + str(ledState))
+
+def vfoOff():
+    ledState = False
+    sm.active(ledState)
+    led(ledState)        
+    print("Led is:" + str(ledState))
+    print("Freq is:" + str(real_freq))
+
+
+
     
 # functions for morse code signal durations
 def dah():
+    vfoOn()
     led.value(1)
     digitalOut.value(1)
     buzzer.duty_u16(1000)
     time.sleep(3 * BlinkRate)
+    vfoOff()
     led.value(0)
     digitalOut.value(0)
     buzzer.duty_u16(0)
@@ -40,10 +79,12 @@ def dah():
 
 
 def dit():
+    vfoOn()
     led.value(1)
     digitalOut.value(1)
     buzzer.duty_u16(1000)
     time.sleep(BlinkRate)
+    vfoOff()
     led.value(0)
     digitalOut.value(0)
     buzzer.duty_u16(0)
@@ -106,9 +147,9 @@ def sendMessage(sendSentence):
         elif i == "-":
             dah()
         elif i == "|":
-            pause(1)  # With two pauses of 3 elements, adds up to 7
+            pause(2)  # With two pauses of 3 elements, adds up to 7
         else:
-            pause(3)
+            pause(2)
 
 
 # A rough workout: seconds per dit:  60 / (50 * WPM)
@@ -124,7 +165,7 @@ def setBuzzFrequency(freq):
 
 def debounce(pin):
     # Start or replace a timer, and trigger on_pressed.
-    timer.init(mode=Timer.ONE_SHOT, period=1000, callback=on_pressed)
+    timer.init(mode=Timer.ONE_SHOT, period=100, callback=on_pressed)
     
     
 def on_pressed(timer):
@@ -133,12 +174,34 @@ def on_pressed(timer):
 
 # Initializing app
 button.irq(trigger = Pin.IRQ_FALLING, handler = debounce)
-setBuzzFrequency(600)
-setWPM(25)
+setBuzzFrequency(682)
+setWPM(20)
+
+
+
+# TODO: Add debounce timer
+def keyerHandler(keyerButton):
+    if (keyerButton.value() == 0):
+        led.value(1)
+        digitalOut.value(1)
+        buzzer.duty_u16(1000)
+        setFreq(real_freq)
+        sm.active(True)
+        print("Led is up")
+        
+    else:
+        led.value(0)
+        digitalOut.value(0)
+        buzzer.duty_u16(0)
+        sm.active(False)
+        print("Led is down")
+
+keyerButton.irq(handler=keyerHandler, trigger=Pin.IRQ_FALLING|Pin.IRQ_RISING)
 
 
 # Keeps reading from stdin and quits only if the word 'exit' is there
 # This loop, by default does not terminate, since stdin is open
+
 print("Enter a parameter to change it, or text to send:")
 for line in stdin_string:
     # Remove trailing newline characters using strip()
@@ -160,4 +223,3 @@ for line in stdin_string:
         
     else:
         sendMessage(cleanLine)
-
