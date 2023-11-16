@@ -15,79 +15,82 @@ from machine import Pin, PWM, Timer
 from rp2 import PIO, StateMachine, asm_pio
 from time import sleep
 
-keyerButton = Pin(21, Pin.IN, Pin.PULL_UP)
-# real_freq = 7022000
+
+#real_freq = 17200
+
 real_freq = 7020000
+
+
 ledState = False
 
-led = Pin(25, Pin.OUT)  # the LED on the Pico is pin 25
-digitalOut = Pin(5, Pin.OUT)  # output to trigger external device
-button = Pin(10, Pin.IN, Pin.PULL_UP)
-buzzer = PWM(Pin(15))
+keyerButton = Pin(19, Pin.IN, Pin.PULL_UP)  # Morse key button
+led = Pin(25, Pin.OUT)                      # The LED on the Pico is pin 25
+digitalOut = Pin(5, Pin.OUT)                # Output to trigger external device
+memoryButton = Pin(11, Pin.IN, Pin.PULL_UP) # Play memory
+buzzer = PWM(Pin(8))                        # PWM buzzer
+rfOut = 2                                   # RF out pin
+rfOut2 = 3
 
 stdin_string = sys.stdin
-lastInterrupt = 0
 timer = Timer(-1)
 
-memory1 = "CQ DE YU4HAK"
-BlinkRate = 0.062
-BuzzFrequency = 600
+memory1 = "VVV"
 
 
-@asm_pio(set_init=PIO.OUT_LOW)
+# 180 degrees inverted. WORKS !!!
+# @asm_pio(set_init=(PIO.OUT_LOW,PIO.OUT_LOW))
+# def square():
+#     wrap_target()
+#     set(pins, 0b10)
+#     set(pins, 0b01)
+#     wrap()
+#     
+
+# 90 degrees. WORKS !!! (double the sm freq!)
+@asm_pio(set_init=(PIO.OUT_LOW,PIO.OUT_LOW))
 def square():
     wrap_target()
-    set(pins, 1)
-    set(pins, 0)
+    set(pins, 0b10)
+    set(pins, 0b11)
+    set(pins, 0b01)
+    set(pins, 0b00)
     wrap()
     
+
 def setFreq(real_freq):
     global sm
-    sm = rp2.StateMachine(0, square, freq=real_freq*2, set_base=Pin(2))
-
-setFreq(real_freq)
+    sm = rp2.StateMachine(0, square, freq=real_freq*2, set_base=Pin(rfOut, rfOut2))
 
 def vfoOn():
     ledState = True
-    setFreq(real_freq)
     sm.active(ledState)
     led(ledState)
-    print("Led is:" + str(ledState))
+    digitalOut.value(1)
+    buzzer.duty_u16(1000)
+   # print("Led is:" + str(ledState))
 
 def vfoOff():
     ledState = False
     sm.active(ledState)
-    led(ledState)        
-    print("Led is:" + str(ledState))
-    print("Freq is:" + str(real_freq))
+    led(ledState)
+    digitalOut.value(0)
+    buzzer.duty_u16(0)
+    # print("Led is:" + str(ledState))
+    # print("Freq is:" + str(real_freq))
 
-
-
-    
+   
 # functions for morse code signal durations
 def dah():
     vfoOn()
-    led.value(1)
-    digitalOut.value(1)
-    buzzer.duty_u16(1000)
     time.sleep(3 * BlinkRate)
     vfoOff()
-    led.value(0)
-    digitalOut.value(0)
-    buzzer.duty_u16(0)
     time.sleep(BlinkRate)
 
 
 def dit():
     vfoOn()
-    led.value(1)
-    digitalOut.value(1)
-    buzzer.duty_u16(1000)
     time.sleep(BlinkRate)
     vfoOff()
-    led.value(0)
-    digitalOut.value(0)
-    buzzer.duty_u16(0)
     time.sleep(BlinkRate)
 
 
@@ -105,7 +108,7 @@ code = {"A": ".-", "B": "-...", "C": "-.-.", "D": "-..", "E": ".", "F": "..-.", 
         ".": ".-.-.-",
         ",": "--..--",
         "?": "..--..",
-        "/": "--..-.",
+        "/": "-..-.",
         "@": ".--.-.",
         " ": "|",
         "-": "-....-",
@@ -158,46 +161,32 @@ def setWPM(wpm):
     BlinkRate = 60 / (50 * wpm)
     print(BlinkRate)
 
-
 def setBuzzFrequency(freq):
     buzzer.freq(freq)
 
-
-def debounce(pin):
-    # Start or replace a timer, and trigger on_pressed.
-    timer.init(mode=Timer.ONE_SHOT, period=100, callback=on_pressed)
-    
-    
-def on_pressed(timer):
+def onMemmoryButtonPressed(timer):
     sendMessage(memory1)
+    
+def debounceMemoryHandler(pin):
+    timer.init(mode=Timer.ONE_SHOT, period=200, callback=onMemmoryButtonPressed)
 
-
-# Initializing app
-button.irq(trigger = Pin.IRQ_FALLING, handler = debounce)
-setBuzzFrequency(682)
-setWPM(20)
-
-
-
-# TODO: Add debounce timer
+# add debounce timer maybe
 def keyerHandler(keyerButton):
     if (keyerButton.value() == 0):
-        led.value(1)
-        digitalOut.value(1)
-        buzzer.duty_u16(1000)
-        setFreq(real_freq)
-        sm.active(True)
-        print("Led is up")
-        
+        vfoOn()
     else:
-        led.value(0)
-        digitalOut.value(0)
-        buzzer.duty_u16(0)
-        sm.active(False)
-        print("Led is down")
+        vfoOff()
 
-keyerButton.irq(handler=keyerHandler, trigger=Pin.IRQ_FALLING|Pin.IRQ_RISING)
+# Initializing app
 
+memoryButton.irq(handler = debounceMemoryHandler, trigger = Pin.IRQ_FALLING)
+keyerButton.irq(handler = keyerHandler, trigger = Pin.IRQ_FALLING|Pin.IRQ_RISING)
+setBuzzFrequency(800)
+setWPM(20)
+setFreq(real_freq)
+
+#sendMessage("v")
+vfoOn()
 
 # Keeps reading from stdin and quits only if the word 'exit' is there
 # This loop, by default does not terminate, since stdin is open
@@ -221,5 +210,25 @@ for line in stdin_string:
         memory1 = newMem
         print('Setting memory 1 to "' + newMem + '"')            
         
+    elif '_FREQ=' == cleanLine[0:6]:
+        newFreq = cleanLine.split('=')[1]
+        setFreq(int(newFreq))
+        print('Setting frequency (close) to "' + newFreq + '"')
+
+    if '+' == cleanLine[0:1]:        
+        real_freq = real_freq + 1000
+        setFreq(int(real_freq))
+        vfoOn()
+        print('Setting freq to ' + str(real_freq))
+        
+    elif '-' == cleanLine[0:1]:
+        real_freq = real_freq - 1000
+        setFreq(int(real_freq))
+        vfoOn()
+        print('Setting freq to ' + str(real_freq))
+        
+    elif '0' == cleanLine[0:1]:
+        vfoOff()
+               
     else:
         sendMessage(cleanLine)
